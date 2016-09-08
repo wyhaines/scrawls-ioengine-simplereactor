@@ -109,7 +109,7 @@ EHELP
             end
           end
         elsif eof && !http_engine_instance.done?
-          deliver_400 self
+          @scrawls.deliver_400 self
         elsif http_engine_instance.done?
           handle http_engine_instance.env
         end
