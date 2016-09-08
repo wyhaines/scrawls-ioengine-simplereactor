@@ -1,20 +1,21 @@
 require 'scrawls/ioengine/simplereactor/version'
 require 'scrawls/ioengine/base'
 require 'socket'
+require 'simplereactor'
 require 'mime-types'
 
 module Scrawls
   module Ioengine
-    class SimpleReactor < Scrawls::Ioengine::Base
+    class Simplereactor < Scrawls::Ioengine::Base
 
       def initialize(scrawls)
         @scrawls = scrawls
       end
 
       def run( config = {} )
-        SimpleReactor.use_engine config[:reactor_engine].to_sym
+        ::SimpleReactor.use_engine config[:reactor_engine].to_sym
 
-        server = TCPServer.new( config[:host], config[:port] )
+        server = ::TCPServer.new( config[:host], config[:port] )
 
         fork_it( config[:processes] - 1 )
 
@@ -36,6 +37,7 @@ module Scrawls
         call_list = SimpleRubyWebServer::Config::TaskList.new
 
         configuration[:processes] = 1
+        configuration[:reactor_engine] = :select
         meta_configuration[:helptext] << <<-EHELP
 --processes COUNT:
   The number of processes to fork. Defaults to 1.
@@ -51,7 +53,7 @@ EHELP
           end
 
           opts.on( '--reactor-engine ENGINE' ) do |engine|
-            call_list << SimpleRubyWebServer::Config::Task.new(9000) { configuraration[:reactor_engine] = ( engine =~ /nio|select/ ) ? engine.to_sym : :nio }
+            call_list << SimpleRubyWebServer::Config::Task.new(9000) { configuraration[:reactor_engine] = ( engine =~ /nio|select/ ) ? engine.to_sym : :select }
           end
         end
 
@@ -72,11 +74,11 @@ EHELP
       end
 
       def do_main_loop server
-        SimpleReactor::Reactor.run do |reactor|
+        ::SimpleReactor.Reactor.run do |reactor|
           @reactor = reactor
           @reactor.attach server, :read do |monitor|
             Thread.current[:connection] = monitor.io.accept
-            get_request '',connection, monitor
+            get_request '',Thread.current[:connection], monitor
           end
         end 
       end
@@ -108,7 +110,7 @@ EHELP
           end
         elsif eof && !http_engine_instance.done?
           deliver_400 self
-        elsif request
+        elsif http_engine_instance.done?
           handle http_engine_instance.env
         end
 
