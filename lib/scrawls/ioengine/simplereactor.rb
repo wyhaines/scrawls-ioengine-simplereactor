@@ -53,7 +53,7 @@ EHELP
           end
 
           opts.on( '--reactor-engine ENGINE' ) do |engine|
-            call_list << SimpleRubyWebServer::Config::Task.new(9000) { configuraration[:reactor_engine] = ( engine =~ /nio|select/ ) ? engine.to_sym : :select }
+            call_list << SimpleRubyWebServer::Config::Task.new(9000) { configuration[:reactor_engine] = ( engine =~ /nio|select/ ) ? engine.to_sym : :select }
           end
         end
 
