@@ -12,14 +12,15 @@ module Scrawls
         @scrawls = scrawls
       end
 
-      def run( config = {} )
-        ::SimpleReactor.use_engine config[:reactor_engine].to_sym
+      def run( conf = {} )
+        @config = conf
+        ::SimpleReactor.use_engine @config[:reactor_engine].to_sym
 
-        server = ::TCPServer.new( config[:host], config[:port] )
+        server = ::TCPServer.new( @config[:host], @config[:port] )
 
-        fork_it( config[:processes] - 1 )
+        fork_it( @config[:processes] - 1 )
 
-        do_main_loop server, config[:threaded]
+        do_main_loop server
       end
 
       def fork_it( process_count )
@@ -79,37 +80,31 @@ EHELP
         call_list
       end
 
-      def do_main_loop server, threaded = false
+      def do_main_loop server
         ::SimpleReactor.Reactor.run do |reactor|
           @reactor = reactor
           @reactor.attach server, :read do |monitor|
-            if threaded
-              Thread.new( monitor.io.accept ) do |connection|
-                Thread.current[:connection] = connection
-                get_request '',connection, monitor
-              end
-            else
-              Thread.current[:connection] = monitor.io.accept
-              get_request '',Thread.current[:connection], monitor
-            end
+            @connection = monitor.io.accept
+            get_request '',@connection, monitor
           end
         end 
       end
 
       def send_data data
-        Thread.current[:connection].write data
+        conn = ( Thread.current[:connection] || @connection )
+        conn.write data unless conn.closed?
       end
 
       def close
-        Thread.current[:connection].flush
-        Thread.current[:connection].close
+        conn = ( Thread.current[:connection] || @connection )
+        conn.flush
+        conn.close
       end
 
       def get_request buffer, connection, monitor = nil
-        Thread.current[:connection] = connection
         eof = false
         buffer << connection.read_nonblock(16384)
-      rescue EOFError
+      rescue EOFError, Errno::ECONNRESET, Errno::EPIPE, IOError
         eof = true
       rescue IO::WaitReadable
         # This is actually handled in the logic below. We just need to survive it.
@@ -123,15 +118,41 @@ EHELP
             end
           end
         elsif eof && !http_engine_instance.done?
-          @scrawls.deliver_400 self
+          begin
+            @scrawls.deliver_400 self
+          rescue Errno::ECONNRESET, Errno::EPIPE, IOError
+            @reactor.detach(connection)
+            connection.close
+          end
         elsif http_engine_instance.done?
-          handle http_engine_instance.env
+          if @config[:threaded]
+            Thread.new( connection ) do |conn|
+              begin
+                Thread.current[:connection] = conn
+                handle http_engine_instance.env
+                @reactor.next_tick do
+                  @reactor.detach(connection)
+                  connection.flush unless connection.closed?
+                  connection.close
+                end
+              rescue EOFError, Errno::ECONNRESET, Errno::EPIPE, IOError
+                eof = true
+              end
+            end
+          else
+            begin
+              handle http_engine_instance.env
+            rescue EOFError, Errno::ECONNRESET, Errno::EPIPE, IOError
+              eof = true
+            end
+          end
         end
 
-        if http_engine_instance.done? || eof
+        #if http_engine_instance.done? || eof
+        if eof
           @reactor.next_tick do
             @reactor.detach(connection)
-            connection.flush
+            connection.flush unless connection.closed?
             connection.close
           end
         end
