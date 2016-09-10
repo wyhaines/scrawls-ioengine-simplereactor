@@ -19,7 +19,7 @@ module Scrawls
 
         fork_it( config[:processes] - 1 )
 
-        do_main_loop server
+        do_main_loop server, config[:threaded]
       end
 
       def fork_it( process_count )
@@ -45,6 +45,8 @@ module Scrawls
 --reactor-engine ENGINE:
   The reactor engine to use within SimpleReactor. Unless otherwise specfied, the default is to attempt to use nio4r.
 
+--threaded:
+  Use events for IO, but run tasks in threads.
 EHELP
 
         options = OptionParser.new do |opts|
@@ -54,6 +56,10 @@ EHELP
 
           opts.on( '--reactor-engine ENGINE' ) do |engine|
             call_list << SimpleRubyWebServer::Config::Task.new(9000) { configuration[:reactor_engine] = ( engine =~ /nio|select/ ) ? engine.to_sym : :select }
+          end
+
+          opts.on( '--threaded' ) do
+            call_list << SimpleRubyWebServer::Config::Task.new(9000) { configuration[:threaded] = true }
           end
         end
 
@@ -73,12 +79,19 @@ EHELP
         call_list
       end
 
-      def do_main_loop server
+      def do_main_loop server, threaded = false
         ::SimpleReactor.Reactor.run do |reactor|
           @reactor = reactor
           @reactor.attach server, :read do |monitor|
-            Thread.current[:connection] = monitor.io.accept
-            get_request '',Thread.current[:connection], monitor
+            if threaded
+              Thread.new( monitor.io.accept ) do |connection|
+                Thread.current[:connection] = connection
+                get_request '',connection, monitor
+              end
+            else
+              Thread.current[:connection] = monitor.io.accept
+              get_request '',Thread.current[:connection], monitor
+            end
           end
         end 
       end
@@ -88,6 +101,7 @@ EHELP
       end
 
       def close
+        Thread.current[:connection].flush
         Thread.current[:connection].close
       end
 
@@ -117,6 +131,7 @@ EHELP
         if http_engine_instance.done? || eof
           @reactor.next_tick do
             @reactor.detach(connection)
+            connection.flush
             connection.close
           end
         end
